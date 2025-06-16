@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>承認済みユーザー管理</title>
+    <style>
+        :root {
+            --bg-color: #f4f7f9;
+            --main-text: #333;
+            --border-color: #ddd;
+            --header-bg: #fff;
+            --primary-color: #007bff;
+            --danger-color: #dc3545;
+            --danger-hover: #c82333;
+            --hover-bg: #e9ecef;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--main-text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background-color: #fff;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        h1, h2 { border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+        .search-form { display: flex; }
+        .search-form input { padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px 0 0 4px; min-width: 250px; }
+        .search-form button { padding: 8px 15px; border: 1px solid var(--primary-color); background-color: var(--primary-color); color: white; border-radius: 0 4px 4px 0; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        thead th { background-color: var(--header-bg); }
+        tbody tr:hover { background-color: var(--hover-bg); }
+        th.sortable a { text-decoration: none; color: inherit; display: block; }
+        th.sortable .arrow { display: inline-block; margin-left: 5px; opacity: 0.7; }
+        
+        /* --- ボタン共通スタイル --- */
+        .action-btn {
+            padding: 6px 12px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .action-btn:hover { opacity: 0.8; }
+        .delete-btn { background-color: var(--danger-color); }
+
+        /* ★★★ START: 削除確認モーダルのCSS ★★★ */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            display: none; /* JSで表示を切り替え */
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .modal-content h2 { font-size: 22px; margin-top: 0; }
+        .modal-content p { margin: 15px 0; font-size: 16px; }
+        .modal-content .user-name { font-weight: bold; color: var(--primary-color); font-size: 18px; }
+        .modal-content .warning { font-size: 14px; color: #555; }
+        .modal-actions {
+            margin-top: 30px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+        }
+        .modal-actions button {
+            padding: 10px 25px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+        }
+        #confirm-delete-btn {
+            background-color: var(--danger-color);
+            color: white;
+            border-color: var(--danger-color);
+        }
+        #confirm-delete-btn:hover { background-color: var(--danger-hover); }
+        /* ★★★ END: 削除確認モーダルのCSS ★★★ */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>承認済みユーザー管理</h1>
+        <div class="controls">
+            <h2><%= users.length %> 人が登録済み</h2>
+            <form class="search-form" action="/admin" method="GET">
+                <input type="text" name="search" placeholder="名前, MCIDなどで検索..." value="<%= searchQuery %>">
+                <button type="submit">検索</button>
+            </form>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <% const headers = { id: 'ID', name: '名前', minecraft_id: 'Minecraft ID', discord_user_id: 'Discord ID', invite_code: '招待コード', approved_at: '承認日時' }; %>
+                    <% for (const [key, value] of Object.entries(headers)) { %>
+                        <th class="sortable">
+                            <% const isCurrentSort = currentSort === key; %>
+                            <% const nextOrder = isCurrentSort && currentOrder === 'asc' ? 'desc' : 'asc'; %>
+                            <a href="/admin?sort=<%= key %>&order=<%= nextOrder %>&search=<%= searchQuery %>">
+                                <%= value %>
+                                <% if (isCurrentSort) { %><span class="arrow"><%= currentOrder === 'asc' ? '▲' : '▼' %></span><% } %>
+                            </a>
+                        </th>
+                    <% } %>
+                    <th>操作</th> </tr>
+            </thead>
+            <tbody>
+                <% if (users.length === 0) { %>
+                    <tr><td colspan="7" style="text-align: center; padding: 40px;">該当するユーザーが見つかりませんでした。</td></tr>
+                <% } else { %>
+                    <% users.forEach(user => { %>
+                        <tr id="user-row-<%= user.id %>">
+                            <td><%= user.id %></td><td><%= user.name %></td><td><%= user.minecraft_id %></td><td><%= user.discord_user_id %></td><td><code><%= user.invite_code %></code></td><td><%= new Date(user.approved_at).toLocaleString('ja-JP') %></td>
+                            <td>
+                                <button class="action-btn delete-btn" data-id="<%= user.id %>" data-name="<%= user.name %>">削除</button>
+                            </td>
+                        </tr>
+                    <% }) %>
+                <% } %>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="delete-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h2>削除の確認</h2>
+            <p><span id="delete-user-name" class="user-name"></span> さんを本当に削除しますか？</p>
+            <p class="warning">この操作は元に戻すことができません。</p>
+            <div class="modal-actions">
+                <button id="cancel-delete-btn">キャンセル</button>
+                <button id="confirm-delete-btn">削除を実行</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const deleteModal = document.getElementById('delete-modal');
+        const deleteUserName = document.getElementById('delete-user-name');
+        const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
+        const cancelDeleteBtn = document.getElementById('cancel-delete-btn');
+        let userIdToDelete = null;
+
+        // "削除"ボタンがクリックされた時の処理
+        document.querySelector('table').addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-btn')) {
+                userIdToDelete = e.target.dataset.id;
+                const userName = e.target.dataset.name;
+                deleteUserName.textContent = userName;
+                deleteModal.style.display = 'flex';
+            }
+        });
+
+        // モーダルを閉じる処理
+        function closeModal() {
+            deleteModal.style.display = 'none';
+            userIdToDelete = null;
+        }
+
+        cancelDeleteBtn.addEventListener('click', closeModal);
+        deleteModal.addEventListener('click', (e) => {
+            // 背景のオーバーレイ部分をクリックしたら閉じる
+            if (e.target === deleteModal) {
+                closeModal();
+            }
+        });
+
+        // 「削除を実行」ボタンがクリックされた時の処理
+        confirmDeleteBtn.addEventListener('click', async () => {
+            if (!userIdToDelete) return;
+
+            try {
+                const res = await fetch('/api/delete-user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: userIdToDelete })
+                });
+
+                if (res.ok) {
+                    // UIから該当する行を削除
+                    const rowToRemove = document.getElementById(`user-row-${userIdToDelete}`);
+                    if (rowToRemove) {
+                        rowToRemove.remove();
+                    }
+                } else {
+                    const result = await res.json();
+                    alert(`削除に失敗しました: ${result.message}`);
+                }
+            } catch (error) {
+                alert('エラーが発生しました。');
+            } finally {
+                closeModal();
+            }
+        });
+    });
+    </script>
+</body>
+</html>
