@@ -24,66 +24,72 @@ module.exports = {
       new ActionRowBuilder().addComponents(readingInput),
       new ActionRowBuilder().addComponents(minecraftIdInput)
     );
+    
     await interaction.showModal(modal);
 
-    // モーダル送信を待つためのtry-catch
+    // モーダルの送信を待機します。
     let modalInteraction;
     try {
         modalInteraction = await interaction.awaitModalSubmit({ 
             filter: (i) => i.customId === `create-invite-modal-${interaction.user.id}`, 
-            time: 120_000 
+            time: 120_000 // 2分間
         });
     } catch (error) {
-        // ユーザーが時間内にモーダルを送信しなかった場合
-        // この時点ではdeferされていないので、followUpでOK
+        // タイムアウトした場合はユーザーに通知して処理を終了します。
         await interaction.followUp({ content: "時間内に応答がなかったため、処理をキャンセルしました。", ephemeral: true });
         return;
     }
 
-    // ★★★ここから先の処理全体をtry-catchで囲む★★★
-    try {
-      // 最初に一度だけ応答を保留する
-      await modalInteraction.deferReply({ ephemeral: true });
+    // QRコード生成など時間のかかる処理が続くため、応答を一度保留にします。
+    await modalInteraction.deferReply({ ephemeral: true });
 
+    try {
       const name = modalInteraction.fields.getTextInputValue("name-input");
       const reading = modalInteraction.fields.getTextInputValue("reading-input");
       const minecraftId = modalInteraction.fields.getTextInputValue("minecraft-id-input");
       
-      // --- Minecraft IDの検証とエラーハンドリング ---
+      // Mojang APIを使用してMinecraft IDの有効性を検証します。
       let minecraftUuid;
       try {
         const response = await axios.get(`https://api.mojang.com/users/profiles/minecraft/${minecraftId}`);
         minecraftUuid = response.data.id;
       } catch (error) {
-        // axiosのエラーかどうかを判定
         if (axios.isAxiosError(error) && error.response?.status === 404) {
-          // 404エラー（IDが見つからない）の場合、専用のメッセージを表示して処理を終了
           await modalInteraction.editReply({
             content: `❌ **エラー:** Minecraft ID \`${minecraftId}\` は見つかりませんでした。\n実在するIDを、大文字・小文字を正確に入力してください。`,
           });
         } else {
-          // その他のAPIエラー（ネットワーク障害など）
-          console.error("Mojang APIエラー:", error);
+          console.error("Mojang API Error:", error);
           await modalInteraction.editReply({
             content: 'Minecraft IDの確認中に外部APIでエラーが発生しました。しばらくしてからもう一度お試しください。',
           });
         }
-        // ★エラーがあった場合は、ここで処理を完全に停止する
-        return; 
+        return;
       }
 
-      // --- データベース処理と応答 ---
+      // 承認ページのURLに必要な環境変数が設定されているか確認します。
+      const serverIp = process.env.SERVER_IP;
+      if (!serverIp) {
+        console.error("Error: SERVER_IP is not set in environment variables.");
+        await modalInteraction.editReply({
+          content: 'サーバーの設定に問題があるため、QRコードを生成できませんでした。管理者に連絡してください。',
+        });
+        return;
+      }
+
+      // 申請データを生成し、暗号化してデータベースに保存します。
       const inviteCode = uuidv4().split("-")[0].toUpperCase();
       const userData = { name, reading, minecraftId, minecraftUuid, discordUserId: interaction.user.id };
       const encryptedData = encrypt(JSON.stringify(userData), inviteCode);
 
-      // Firebaseに暗号化データを保存
       await firebaseDb.collection('pending_applications').doc(inviteCode).set({
         encryptedData: encryptedData,
         createdAt: new Date()
       });
 
-      const approvalUrl = `http://localhost:${process.env.PORT || 3000}/approve?code=${inviteCode}`;
+      // 承認用URLからQRコードとDiscord埋め込みメッセージを作成します。
+      const port = process.env.PORT || 3000;
+      const approvalUrl = `http://${serverIp}:${port}/approve?code=${inviteCode}`;
       const qrCodeBuffer = await qrcode.toBuffer(approvalUrl);
       const attachment = new AttachmentBuilder(qrCodeBuffer, { name: "approval-qr.png" });
 
@@ -93,15 +99,15 @@ module.exports = {
         .setImage("attachment://approval-qr.png")
         .setColor(0x5865F2);
       
-      // deferを編集して最終的な応答を返す
+      // QRコードを含む最終的な応答を送信します。
       await modalInteraction.editReply({ embeds: [embed], files: [attachment] });
 
     } catch (error) {
-      console.error("コマンド処理中に予期せぬエラー:", error);
-      // 既にdeferされているはずなので、editReplyでエラーメッセージを返す
+      console.error("コマンド処理中に予期せぬエラーが発生しました:", error);
+      // 応答が保留中のままエラーになった場合、ユーザーにエラーを通知します。
       if (modalInteraction && !modalInteraction.replied) {
           await modalInteraction.editReply({
-            content: 'コマンドの実行中に予期せぬエラーが発生しました。開発者に連絡してください。',
+              content: 'コマンドの実行中に予期せぬエラーが発生しました。開発者に連絡してください。',
           });
       }
     }
