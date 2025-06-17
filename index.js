@@ -44,13 +44,11 @@ for (const file of commandFiles) {
   }
 }
 
-// ボット起動時の処理
 client.once(Events.ClientReady, c => {
   console.log(`✅ ボット起動完了: ${c.user.tag}`);
   c.application.commands.set(client.commands.map(cmd => cmd.data.toJSON()));
 });
 
-// コマンド実行時の処理
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   const command = client.commands.get(interaction.commandName);
@@ -75,9 +73,42 @@ client.on(Events.InteractionCreate, async interaction => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Nginxなどのリバースプロキシ環境下で正しいIPアドレスを取得するために必要になる場合があり。
+// 環境に応じてコメントアウトを解除すること。 (例: app.set('trust proxy', 1))
+// app.set('trust proxy', true);
+
 app.set('view engine', 'ejs');
-app.use(express.json()); // APIでJSONを扱えるようにする
-app.use(express.urlencoded({ extended: true })); // フォームからのデータを受け取れるようにする
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// IPアドレス制限ミドルウェア
+// .envから許可するIPアドレスのリストを読み込む
+const ALLOWED_IPS = process.env.ALLOWED_IPS
+  ? process.env.ALLOWED_IPS.split(',').map(ip => ip.trim())
+  : [];
+
+const ipFilterMiddleware = (req, res, next) => {
+  // ALLOWED_IPSが設定されていない場合、制限をかけずに次に進む
+  if (ALLOWED_IPS.length === 0) {
+    return next();
+  }
+
+  // リクエスト元のIPアドレスを取得 (trust proxyが有効な場合はクライアントのIP)
+  const clientIp = req.ip;
+
+  // IPが許可リストに含まれているかチェック
+  if (ALLOWED_IPS.includes(clientIp)) {
+    next(); // 許可されているので次の処理へ
+  } else {
+    // 許可されていないIPアドレスからのアクセス
+    console.warn(`[アクセス拒否] 許可されていないIPからのアクセスです: ${clientIp}`);
+    res.status(403).send("<h1>403 Forbidden</h1><p>指定されたIPアドレスからのアクセスは許可されていません。</p>");
+  }
+};
+
+// ★ 全てのWebルートに対してIP制限ミドルウェアを適用
+app.use(ipFilterMiddleware);
+
 
 // ---------------------------------------------------------------------------------
 // ページ表示用ルート
@@ -169,7 +200,6 @@ app.post('/api/finalize-approval', async (req, res) => {
         return res.status(500).json({ success: false, message: "ローカルデータベースへの保存に失敗しました。" });
       }
       
-      // SQLiteへの保存が成功したらFirebaseから削除
       await firebaseDb.collection('pending_applications').doc(invite_code).delete();
       
       res.json({ success: true, message: "承認し、ローカルDBに保存しました。" });
@@ -218,10 +248,8 @@ app.post('/api/delete-user', (req, res) => {
 // =================================================================================
 // 起動
 // =================================================================================
-// Discordボットをログインさせる
 client.login(process.env.DISCORD_TOKEN);
 
-// Webサーバーを起動する
 app.listen(PORT, () => {
   console.log(`[情報] Webサーバー起動完了: http://localhost:${PORT}/admin`);
 });
