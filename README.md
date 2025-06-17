@@ -1,4 +1,4 @@
-# Discord & Web 連携 ユーザー申請管理システム
+# Minecraft用 手動Discordユーザー申請管理システム
 
 ## 概要
 
